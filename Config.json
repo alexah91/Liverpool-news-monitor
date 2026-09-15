@@ -1,1 +1,19 @@
+{
+  "scan_interval": 5,
 
+  "keywords": [
+    "liverpool",
+    "liverpool fc",
+    "liverpool football club",
+    "lfc",
+    "anfield",
+    "reds"
+  ],
+
+  "rss_feeds": [
+    {
+      "name": "BBC Sport",
+      "url": "https://feeds.bbci.co.uk/sport/rss.xml"
+    }
+  ]
+}
