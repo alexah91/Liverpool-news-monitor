@@ -1,133 +1,128 @@
 {
-“scan_interval”: 5,
-
-“keywords”: [
-“liverpool”,
-“liverpool fc”,
-“liverpool football club”,
-“lfc”,
-“anfield”,
-“reds”
-],
-
-“strong_keywords”: [
-“liverpool”,
-“liverpool fc”,
-“liverpool football club”,
-“lfc”,
-“anfield”,
-“liverpool manager”,
-“liverpool boss”,
-“liverpool midfielder”,
-“liverpool defender”,
-“liverpool striker”,
-“liverpool forward”,
-“liverpool goalkeeper”,
-“liverpool transfer”,
-“liverpool transfers”,
-“liverpool sign”,
-“liverpool signing”,
-“liverpool contract”
-],
-
-“rss_feeds”: [
-{
-“name”: “Liverpool FC Official”,
-“url”: “https://www.liverpoolfc.com/rss/news/latest”
-},
-{
-“name”: “Liverpool Echo - Liverpool FC”,
-“url”: “https://www.liverpoolecho.co.uk/all-about/liverpool%20fc?service=rss”
-},
-{
-“name”: “BBC Sport”,
-“url”: “https://feeds.bbci.co.uk/sport/rss.xml”
-}
-],
-
-“web_sources”: [
-{
-“name”: “Liverpool FC Official”,
-“url”: “https://www.liverpoolfc.com/news?categoryId=186”,
-“type”: “liverpool_official”
-},
-{
-“name”: “Liverpool Echo - Liverpool FC”,
-“url”: “https://www.liverpoolecho.co.uk/all-about/liverpool-fc”,
-“type”: “liverpool_page”
-},
-{
-“name”: “Liverpool Echo - Paul Gorst”,
-“url”: “https://www.liverpoolecho.co.uk/authors/paul-gorst/”,
-“type”: “author_page”
-},
-{
-“name”: “Liverpool Echo - Ian Doyle”,
-“url”: “https://www.liverpoolecho.co.uk/authors/ian-doyle-le/”,
-“type”: “author_page”
-},
-{
-“name”: “BBC Sport - Liverpool”,
-“url”: “https://www.bbc.com/sport/topics/cpv471x401jt”,
-“type”: “liverpool_page”
-},
-{
-“name”: “Sky Sports - Liverpool”,
-“url”: “https://www.skysports.com/liverpool”,
-“type”: “liverpool_page”
-},
-{
-“name”: “The Athletic - David Ornstein”,
-“url”: “https://www.nytimes.com/athletic/author/david-ornstein/”,
-“type”: “author_page”
-},
-{
-“name”: “The Athletic - James Pearce”,
-“url”: “https://www.nytimes.com/athletic/author/james-pearce/”,
-“type”: “author_page”
-},
-{
-“name”: “The Times - Paul Joyce”,
-“url”: “https://www.thetimes.com/profile/paul-joyce”,
-“type”: “author_page”
-},
-{
-“name”: “The Telegraph - Dominic King”,
-“url”: “https://www.telegraph.co.uk/authors/d/dk-do/dominic-king/”,
-“type”: “author_page”
-},
-{
-“name”: “talkSPORT - Alex Crook”,
-“url”: “https://talksport.com/author/alex-crook/”,
-“type”: “author_page”
-},
-{
-“name”: “talkSPORT - Ben Jacobs”,
-“url”: “https://talksport.com/who/ben-jacobs/”,
-“type”: “author_page”
-}
-],
-
-“x_sources”: [
-{
-“name”: “Alex Crook”,
-“url”: “https://x.com/alex_crook”
-},
-{
-“name”: “Ben Jacobs”,
-“url”: “https://x.com/JacobsBen”
-},
-{
-“name”: “Fabrizio Romano”,
-“url”: “https://x.com/FabrizioRomano”
-},
-{
-“name”: “Florian Plettenberg”,
-“url”: “https://x.com/Plettigoal”
-},
-{
-“name”: “Gianluca Di Marzio”,
-“url”: “https://x.com/DiMarzio”
-}
-]
+  "scan_interval": 5,
+  "keywords": [
+    "liverpool",
+    "liverpool fc",
+    "liverpool football club",
+    "lfc",
+    "anfield",
+    "reds"
+  ],
+  "strong_keywords": [
+    "liverpool",
+    "liverpool fc",
+    "liverpool football club",
+    "lfc",
+    "anfield",
+    "liverpool manager",
+    "liverpool boss",
+    "liverpool midfielder",
+    "liverpool defender",
+    "liverpool striker",
+    "liverpool forward",
+    "liverpool goalkeeper",
+    "liverpool transfer",
+    "liverpool transfers",
+    "liverpool sign",
+    "liverpool signing",
+    "liverpool contract"
+  ],
+  "rss_feeds": [
+    {
+      "name": "Liverpool FC Official",
+      "url": "https://www.liverpoolfc.com/rss/news/latest"
+    },
+    {
+      "name": "Liverpool Echo - Liverpool FC",
+      "url": "https://www.liverpoolecho.co.uk/all-about/liverpool%20fc?service=rss"
+    },
+    {
+      "name": "BBC Sport",
+      "url": "https://feeds.bbci.co.uk/sport/rss.xml"
+    }
+  ],
+  "web_sources": [
+    {
+      "name": "Liverpool FC Official",
+      "url": "https://www.liverpoolfc.com/news?categoryId=186",
+      "type": "liverpool_official"
+    },
+    {
+      "name": "Liverpool Echo - Liverpool FC",
+      "url": "https://www.liverpoolecho.co.uk/all-about/liverpool-fc",
+      "type": "liverpool_page"
+    },
+    {
+      "name": "Liverpool Echo - Paul Gorst",
+      "url": "https://www.liverpoolecho.co.uk/authors/paul-gorst/",
+      "type": "author_page"
+    },
+    {
+      "name": "Liverpool Echo - Ian Doyle",
+      "url": "https://www.liverpoolecho.co.uk/authors/ian-doyle-le/",
+      "type": "author_page"
+    },
+    {
+      "name": "BBC Sport - Liverpool",
+      "url": "https://www.bbc.com/sport/topics/cpv471x401jt",
+      "type": "liverpool_page"
+    },
+    {
+      "name": "Sky Sports - Liverpool",
+      "url": "https://www.skysports.com/liverpool",
+      "type": "liverpool_page"
+    },
+    {
+      "name": "The Athletic - David Ornstein",
+      "url": "https://www.nytimes.com/athletic/author/david-ornstein/",
+      "type": "author_page"
+    },
+    {
+      "name": "The Athletic - James Pearce",
+      "url": "https://www.nytimes.com/athletic/author/james-pearce/",
+      "type": "author_page"
+    },
+    {
+      "name": "The Times - Paul Joyce",
+      "url": "https://www.thetimes.com/profile/paul-joyce",
+      "type": "author_page"
+    },
+    {
+      "name": "The Telegraph - Dominic King",
+      "url": "https://www.telegraph.co.uk/authors/d/dk-do/dominic-king/",
+      "type": "author_page"
+    },
+    {
+      "name": "talkSPORT - Alex Crook",
+      "url": "https://talksport.com/author/alex-crook/",
+      "type": "author_page"
+    },
+    {
+      "name": "talkSPORT - Ben Jacobs",
+      "url": "https://talksport.com/who/ben-jacobs/",
+      "type": "author_page"
+    }
+  ],
+  "x_sources": [
+    {
+      "name": "Alex Crook",
+      "url": "https://x.com/alex_crook"
+    },
+    {
+      "name": "Ben Jacobs",
+      "url": "https://x.com/JacobsBen"
+    },
+    {
+      "name": "Fabrizio Romano",
+      "url": "https://x.com/FabrizioRomano"
+    },
+    {
+      "name": "Florian Plettenberg",
+      "url": "https://x.com/Plettigoal"
+    },
+    {
+      "name": "Gianluca Di Marzio",
+      "url": "https://x.com/DiMarzio"
+    }
+  ]
 }
