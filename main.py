@@ -257,6 +257,6 @@ def main():
                 f"ERROR: {feed['name']}: {error}"
             )
 
-
+print("Discord webhook secret finns:", bool(DISCORD_WEBHOOK))
 if __name__ == "__main__":
     main()
