@@ -1,35 +1,68 @@
 import os
 import json
 import sqlite3
-from datetime import datetime
-from urllib.parse import urljoin
+import hashlib
+import re
+from datetime import datetime, timezone
 
 import requests
 import feedparser
 from bs4 import BeautifulSoup
 
 
-# ==========================================
-# CONFIG
-# ==========================================
+# ============================================================
+# LOAD CONFIG
+# ============================================================
 
 with open("config.json", "r", encoding="utf-8") as f:
     config = json.load(f)
 
-DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
+
+DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
+
+if not DISCORD_WEBHOOK:
+    print("ERROR: DISCORD_WEBHOOK is missing.")
+    raise SystemExit(1)
 
 
-# ==========================================
+KEYWORDS = [
+    x.lower()
+    for x in config.get("keywords", [])
+]
+
+STRONG_KEYWORDS = [
+    x.lower()
+    for x in config.get("strong_keywords", [])
+]
+
+
+# ============================================================
+# PRIORITY SOURCES
+# ============================================================
+
+PRIORITY_SOURCES = {
+    "David Ornstein",
+    "James Pearce",
+    "Ian Doyle",
+    "Alex Crook",
+    "Fabrizio Romano",
+    "Ben Jacobs",
+}
+
+
+# ============================================================
 # DATABASE
-# ==========================================
+# ============================================================
 
-db = sqlite3.connect("news.db")
+DB_FILE = "news.db"
+
+db = sqlite3.connect(DB_FILE)
 
 db.execute("""
 CREATE TABLE IF NOT EXISTS articles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    url TEXT UNIQUE,
+    id TEXT PRIMARY KEY,
     title TEXT,
+    url TEXT,
     source TEXT,
     published TEXT,
     created_at TEXT
@@ -39,427 +72,544 @@ CREATE TABLE IF NOT EXISTS articles (
 db.commit()
 
 
-# ==========================================
-# LIVERPOOL FILTER
-# ==========================================
-
-STRONG_KEYWORDS = [
-    keyword.lower()
-    for keyword in config.get("strong_keywords", [])
-]
-
+# ============================================================
+# TEXT HELPERS
+# ============================================================
 
 def clean_text(text):
     if not text:
         return ""
 
-    soup = BeautifulSoup(
-        text,
-        "html.parser"
-    )
+    text = BeautifulSoup(str(text), "html.parser").get_text(" ")
 
-    return soup.get_text(
-        " ",
-        strip=True
-    )
+    text = re.sub(r"\s+", " ", text)
 
+    return text.strip()
+
+
+def normalize_url(url):
+    if not url:
+        return ""
+
+    return url.strip()
+
+
+# ============================================================
+# LIVERPOOL FILTER
+# ============================================================
 
 def is_liverpool_article(title, summary=""):
-
     text = clean_text(
         f"{title} {summary}"
     ).lower()
 
-    # Viktigt:
-    # "reds" används INTE längre.
-    # Artikeln måste ha en tydlig Liverpool-signal.
-
+    # Strong Liverpool-specific keywords
     for keyword in STRONG_KEYWORDS:
+        if keyword in text:
+            return True
 
+    # General Liverpool keywords
+    for keyword in KEYWORDS:
         if keyword in text:
             return True
 
     return False
 
 
-# ==========================================
-# DATABASE FUNCTIONS
-# ==========================================
+# ============================================================
+# TRANSFER DETECTION
+# ============================================================
 
-def article_exists(url):
+TRANSFER_KEYWORDS = [
+    "transfer",
+    "transfers",
+    "sign",
+    "signing",
+    "signed",
+    "deal",
+    "agreement",
+    "bid",
+    "offer",
+    "interest",
+    "interested",
+    "target",
+    "targets",
+    "negotiation",
+    "negotiations",
+    "talks",
+    "contract",
+    "contract extension",
+    "medical",
+    "here we go",
+    "move",
+    "loan",
+    "swap",
+    "release clause",
+]
 
+
+def is_transfer_news(title, summary=""):
+    text = clean_text(
+        f"{title} {summary}"
+    ).lower()
+
+    return any(
+        keyword in text
+        for keyword in TRANSFER_KEYWORDS
+    )
+
+
+# ============================================================
+# PRIORITY SOURCE
+# ============================================================
+
+def is_priority_source(source_name):
+    if not source_name:
+        return False
+
+    source_lower = source_name.lower()
+
+    for priority in PRIORITY_SOURCES:
+        if priority.lower() in source_lower:
+            return True
+
+    return False
+
+
+# ============================================================
+# MESSAGE FORMAT
+# ============================================================
+
+def build_discord_message(
+    title,
+    url,
+    source,
+    summary=""
+):
+    priority = is_priority_source(source)
+    transfer = is_transfer_news(title, summary)
+
+    if priority and transfer:
+        prefix = "🟢 🚨"
+    elif priority:
+        prefix = "🟢"
+    elif transfer:
+        prefix = "🚨"
+    else:
+        prefix = "📰"
+
+    message = (
+        f"{prefix} **{source}**\n\n"
+        f"**{title}**\n\n"
+        f"🔗 {url}"
+    )
+
+    return message
+
+
+# ============================================================
+# DISCORD
+# ============================================================
+
+def send_discord(
+    title,
+    url,
+    source,
+    summary=""
+):
+    message = build_discord_message(
+        title,
+        url,
+        source,
+        summary
+    )
+
+    payload = {
+        "content": message
+    }
+
+    response = requests.post(
+        DISCORD_WEBHOOK,
+        json=payload,
+        timeout=20
+    )
+
+    if response.status_code not in (200, 204):
+        print(
+            "Discord error:",
+            response.status_code,
+            response.text
+        )
+
+        return False
+
+    print(
+        "Discord sent:",
+        source,
+        title
+    )
+
+    return True
+
+
+# ============================================================
+# DATABASE HELPERS
+# ============================================================
+
+def article_id(title, url):
+    raw = f"{title}|{url}".encode(
+        "utf-8",
+        errors="ignore"
+    )
+
+    return hashlib.sha256(raw).hexdigest()
+
+
+def already_seen(article_hash):
     cursor = db.execute(
-        """
-        SELECT id
-        FROM articles
-        WHERE url = ?
-        """,
-        (url,)
+        "SELECT 1 FROM articles WHERE id = ?",
+        (article_hash,)
     )
 
     return cursor.fetchone() is not None
 
 
-def save_article(article):
-
+def save_article(
+    article_hash,
+    title,
+    url,
+    source,
+    published=""
+):
     db.execute(
         """
         INSERT OR IGNORE INTO articles
-        (
-            url,
-            title,
-            source,
-            published,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?)
+        (id, title, url, source, published, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
-            article["url"],
-            article["title"],
-            article["source"],
-            article["published"],
-            datetime.utcnow().isoformat()
+            article_hash,
+            title,
+            url,
+            source,
+            published,
+            datetime.now(timezone.utc).isoformat()
         )
     )
 
     db.commit()
 
 
-# ==========================================
-# DISCORD
-# ==========================================
-
-def send_discord(article):
-
-    embed = {
-        "title": article["title"],
-        "url": article["url"],
-        "description": article["summary"][:1000],
-        "color": 0xC8102E,
-
-        "fields": [
-            {
-                "name": "Källa",
-                "value": article["source"],
-                "inline": True
-            },
-            {
-                "name": "Publicerad",
-                "value": article["published"] or "Okänd",
-                "inline": True
-            }
-        ],
-
-        "footer": {
-            "text": "Liverpool News Monitor"
-        }
-    }
-
-    payload = {
-        "content": "🔴 **NY LIVERPOOL-NYHET**",
-        "embeds": [embed]
-    }
-
-    response = requests.post(
-        DISCORD_WEBHOOK,
-        json=payload,
-        timeout=15
-    )
-
-    response.raise_for_status()
-
-
-# ==========================================
-# SEND ARTICLE
-# ==========================================
+# ============================================================
+# PROCESS ARTICLE
+# ============================================================
 
 def process_article(
     title,
     url,
-    summary,
     source,
+    summary="",
     published=""
 ):
+    title = clean_text(title)
+    summary = clean_text(summary)
+    url = normalize_url(url)
 
     if not title or not url:
         return
 
-    if not url.startswith(
-        ("http://", "https://")
-    ):
-        return
-
-    if article_exists(url):
-        return
-
-    article = {
-        "title": title.strip(),
-        "url": url.strip(),
-        "summary": clean_text(summary),
-        "source": source,
-        "published": published
-    }
-
-    print(
-        f"CHECKING: {title}"
-    )
-
+    # Only Liverpool content
     if not is_liverpool_article(
-        article["title"],
-        article["summary"]
+        title,
+        summary
     ):
         print(
-            f"IGNORED - not Liverpool: {title}"
+            "Filtered:",
+            source,
+            title
         )
+
         return
 
-    print(
-        f"NEW LIVERPOOL ARTICLE: {title}"
+    article_hash = article_id(
+        title,
+        url
     )
 
-    # Discord först.
-    # Spara endast om Discord lyckas.
-    send_discord(article)
-
-    save_article(article)
-
-
-# ==========================================
-# RSS
-# ==========================================
-
-def scan_feed(feed_config):
-
-    print(
-        f"Scanning RSS: {feed_config['name']}"
-    )
-
-    feed = feedparser.parse(
-        feed_config["url"]
-    )
-
-    for entry in feed.entries:
-
-        title = entry.get(
-            "title",
-            ""
-        ).strip()
-
-        url = entry.get(
-            "link",
-            ""
-        ).strip()
-
-        summary = clean_text(
-            entry.get(
-                "summary",
-                ""
-            )
+    # Do not send duplicates
+    if already_seen(article_hash):
+        print(
+            "Already seen:",
+            title
         )
 
-        published = entry.get(
-            "published",
-            ""
-        )
+        return
 
-        process_article(
+    # Send first
+    success = send_discord(
+        title,
+        url,
+        source,
+        summary
+    )
+
+    # Only save after successful Discord delivery
+    if success:
+        save_article(
+            article_hash,
             title,
             url,
-            summary,
-            feed_config["name"],
+            source,
             published
         )
 
 
-# ==========================================
-# WEB PAGE
-# ==========================================
+# ============================================================
+# RSS SCANNER
+# ============================================================
 
-def get_page(url):
-
-    headers = {
-        "User-Agent":
-        "Mozilla/5.0 Liverpool-News-Monitor/1.0"
-    }
-
-    response = requests.get(
-        url,
-        headers=headers,
-        timeout=20
+def scan_rss():
+    feeds = config.get(
+        "rss_feeds",
+        []
     )
 
-    response.raise_for_status()
-
-    return response.text
-
-
-# ==========================================
-# OFFICIAL / LIVERPOOL PAGES
-# ==========================================
-
-def scan_liverpool_page(source):
-
-    print(
-        f"Scanning Liverpool page: {source['name']}"
-    )
-
-    html = get_page(
-        source["url"]
-    )
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
-    )
-
-    found = set()
-
-    for link in soup.find_all("a"):
-
-        title = link.get_text(
-            " ",
-            strip=True
+    for feed_config in feeds:
+        name = feed_config.get(
+            "name",
+            "RSS"
         )
 
-        href = link.get("href")
-
-        if not title or not href:
-            continue
-
-        url = urljoin(
-            source["url"],
-            href
+        url = feed_config.get(
+            "url"
         )
 
-        if url in found:
+        if not url:
             continue
 
-        found.add(url)
+        print(
+            f"Scanning RSS: {name}"
+        )
 
-        # Endast riktiga webbadresser
-        if not url.startswith(
-            ("http://", "https://")
-        ):
-            continue
+        try:
+            feed = feedparser.parse(url)
 
-        # Liverpool FC
-        if source["type"] == "liverpool_official":
+            for entry in feed.entries:
 
-            if "liverpoolfc.com" not in url:
-                continue
+                title = entry.get(
+                    "title",
+                    ""
+                )
 
-            if "/news/" not in url:
-                continue
+                link = entry.get(
+                    "link",
+                    ""
+                )
 
-            # Officiella Liverpool-sidan är redan
-            # Liverpool-specifik.
-            process_article(
-                title,
-                url,
-                title,
-                source["name"]
+                summary = entry.get(
+                    "summary",
+                    ""
+                )
+
+                published = entry.get(
+                    "published",
+                    entry.get(
+                        "updated",
+                        ""
+                    )
+                )
+
+                process_article(
+                    title,
+                    link,
+                    name,
+                    summary,
+                    published
+                )
+
+        except Exception as e:
+            print(
+                f"RSS error ({name}): {e}"
             )
 
-        # Övriga Liverpool-sidor
-        else:
 
-            if not is_liverpool_article(
-                title,
-                ""
+# ============================================================
+# WEB PAGE SCANNER
+# ============================================================
+
+def scan_web_page(
+    source_config
+):
+    name = source_config.get(
+        "name",
+        "Web"
+    )
+
+    url = source_config.get(
+        "url"
+    )
+
+    if not url:
+        return
+
+    print(
+        f"Scanning web page: {name}"
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(compatible; "
+            "LiverpoolNewsMonitor/1.0)"
+        )
+    }
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=20
+        )
+
+        if response.status_code != 200:
+            print(
+                f"Web error ({name}): "
+                f"{response.status_code}"
+            )
+
+            return
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
+
+        links = soup.find_all(
+            "a",
+            href=True
+        )
+
+        seen_links = set()
+
+        for link in links:
+
+            href = link.get("href")
+
+            title = clean_text(
+                link.get_text(" ", strip=True)
+            )
+
+            if not href or not title:
+                continue
+
+            if href.startswith("/"):
+                from urllib.parse import urljoin
+
+                href = urljoin(
+                    url,
+                    href
+                )
+
+            if not href.startswith(
+                "http"
             ):
                 continue
 
+            if href in seen_links:
+                continue
+
+            seen_links.add(href)
+
+            if len(title) < 15:
+                continue
+
+            # Limit obvious navigation links
+            if title.lower() in {
+                "home",
+                "login",
+                "subscribe",
+                "contact",
+                "menu",
+                "search",
+            }:
+                continue
+
             process_article(
                 title,
-                url,
-                title,
-                source["name"]
+                href,
+                name
             )
 
+    except Exception as e:
+        print(
+            f"Web error ({name}): {e}"
+        )
 
-# ==========================================
-# AUTHOR PAGES
-# ==========================================
 
-def scan_author_page(source):
+# ============================================================
+# X SOURCES
+# ============================================================
+
+def show_x_sources():
+    x_sources = config.get(
+        "x_sources",
+        []
+    )
+
+    print("")
+    print(
+        "X sources registered:"
+    )
+
+    for source in x_sources:
+        print(
+            f"  - {source.get('name')}: "
+            f"{source.get('url')}"
+        )
 
     print(
-        f"Scanning author: {source['name']}"
+        "X scanning requires a legitimate "
+        "X API/public-data method."
     )
 
-    html = get_page(
-        source["url"]
+
+# ============================================================
+# TEST DISCORD
+# ============================================================
+
+def test_discord():
+    message = (
+        "🟢 **Liverpool News Monitor**\n\n"
+        "Scanner is online and working."
     )
 
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
+    response = requests.post(
+        DISCORD_WEBHOOK,
+        json={
+            "content": message
+        },
+        timeout=20
     )
 
-    found = set()
-
-    for link in soup.find_all("a"):
-
-        title = link.get_text(
-            " ",
-            strip=True
+    if response.status_code in (
+        200,
+        204
+    ):
+        print(
+            "Discord test successful."
         )
 
-        href = link.get("href")
-
-        if not title or not href:
-            continue
-
-        url = urljoin(
-            source["url"],
-            href
-        )
-
-        if url in found:
-            continue
-
-        found.add(url)
-
-        if not url.startswith(
-            ("http://", "https://")
-        ):
-            continue
-
-        # Endast artiklar som ser ut som
-        # riktiga artikellänkar.
-        if not any(
-            part in url.lower()
-            for part in [
-                "/football/",
-                "/sport/",
-                "/liverpool/",
-                "/article/",
-                "/news/"
-            ]
-        ):
-            continue
-
-        # Mycket viktigt:
-        # Författaren i sig räcker INTE.
-        # Själva artikeln måste ha Liverpool-signal.
-        if not is_liverpool_article(
-            title,
-            ""
-        ):
-            continue
-
-        process_article(
-            title,
-            url,
-            title,
-            source["name"]
+    else:
+        print(
+            "Discord test failed:",
+            response.status_code,
+            response.text
         )
 
 
-# ==========================================
+# ============================================================
 # MAIN
-# ==========================================
+# ============================================================
 
 def main():
 
@@ -468,86 +618,54 @@ def main():
     )
 
     print(
-        "Liverpool News Monitor started"
-    )
-
-    print(
-        "Strict Liverpool filtering: ON"
+        "Liverpool News Monitor"
     )
 
     print(
         "================================"
     )
 
-    # --------------------------------------
-    # RSS SOURCES
-    # --------------------------------------
+    print(
+        "Priority sources:"
+    )
 
-    for feed in config.get(
-        "rss_feeds",
-        []
+    for source in sorted(
+        PRIORITY_SOURCES
     ):
+        print(
+            f"  🟢 {source}"
+        )
 
-        try:
+    print("")
 
-            scan_feed(feed)
+    # Test Discord
+    test_discord()
 
-        except Exception as error:
+    print("")
 
-            print(
-                f"ERROR RSS {feed['name']}: {error}"
-            )
+    # RSS
+    scan_rss()
 
+    print("")
 
-    # --------------------------------------
-    # WEB SOURCES
-    # --------------------------------------
-
-    for source in config.get(
+    # Web sources
+    for source_config in config.get(
         "web_sources",
         []
     ):
-
-        try:
-
-            if source["type"] == "author_page":
-
-                scan_author_page(
-                    source
-                )
-
-            else:
-
-                scan_liverpool_page(
-                    source
-                )
-
-        except Exception as error:
-
-            print(
-                f"ERROR WEB {source['name']}: {error}"
-            )
-
-
-    # --------------------------------------
-    # X SOURCES
-    # --------------------------------------
-
-    print(
-        "X sources registered:"
-    )
-
-    for source in config.get(
-        "x_sources",
-        []
-    ):
-
-        print(
-            f"- {source['name']}: {source['url']}"
+        scan_web_page(
+            source_config
         )
 
+    print("")
+
+    # X sources are registered,
+    # but not scraped/bypassed.
+    show_x_sources()
+
+    print("")
     print(
-        "X monitoring will be added separately."
+        "Scan complete."
     )
 
 
