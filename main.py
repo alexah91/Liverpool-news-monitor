@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 
 
 # ============================================================
-# SETTINGS
+# LIVERPOOL NEWS MONITOR 5.0
 # ============================================================
 
 NORMAL_MAX_AGE = timedelta(minutes=10)
@@ -26,11 +26,15 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0 Safari/537.36"
     )
 }
+
+
+# ============================================================
+# PRIORITY SOURCES
+# ============================================================
 
 PRIORITY_SOURCES = {
     "David Ornstein",
@@ -41,77 +45,77 @@ PRIORITY_SOURCES = {
     "Ben Jacobs",
 }
 
+
+# ============================================================
+# BLOCKED CONTENT
+# ============================================================
+
 BLOCKED_CONTENT = [
     "blood red liverpool podcast",
     "blood red podcast",
+    "blood red",
+    "anfield sector",
 ]
 
-# Content that should normally never become a news alert.
-BLOCKED_PHRASES = [
-    "how to watch",
-    "how to watch live",
-    "where to watch",
-    "watch live",
-    "live stream",
-    "live streaming",
-    "tv channel",
-    "kick-off time",
-    "kickoff time",
-    "what time is",
-    "quiz",
-    "take our quiz",
-    "gallery",
-    "click here",
-    "download our app",
-    "win tickets",
-    "betting",
-    "odds",
-]
 
-# URL patterns that are normally not real news articles.
-BLOCKED_URL_PARTS = [
+# ============================================================
+# BAD URL PARTS
+# ============================================================
+
+BAD_URL_PARTS = [
     "/live-blog/",
-    "/liveblog/",
-    "/live-blog",
     "/live/",
-    "/live-updates",
-    "/live_updates",
-    "/commentary",
+    "/liveblog/",
+    "live-updates",
     "/videos/",
     "/video/",
-    "/podcasts/",
-    "/podcast/",
-    "/quiz/",
-    "/quizzes/",
     "/gallery/",
-    "/search",
+    "/galleries/",
+    "/quiz",
+    "/quizzes",
+    "/betting/",
+    "/bet/",
+    "/casino/",
+    "/advertise/",
+    "/advertising/",
     "/login",
     "/register",
     "/signup",
-    "/app",
-    "/betting",
-    "/bet/",
-    "/advertise",
+    "/app/",
+    "/podcasts/",
 ]
 
-# Navigation / utility links.
-BLOCKED_LINK_TEXT = [
-    "home",
-    "login",
-    "sign in",
-    "register",
-    "subscribe",
+
+# ============================================================
+# BAD TITLE PHRASES
+# ============================================================
+
+BAD_TITLE_PHRASES = [
+    "how to watch",
+    "how to watch live",
+    "tv channel",
+    "kick-off time",
+    "kick off time",
+    "what time is",
+    "where to watch",
+    "live stream",
+    "commentary stream",
+    "live updates",
+    "live coverage",
+    "live score",
+    "matchday programme",
+    "quiz",
+    "gallery",
+    "photos",
+    "pictures",
+    "video",
+    "watch:",
+    "highlights",
+    "betting tips",
+    "odds",
+    "casino",
+    "giveaway",
     "newsletter",
-    "contact",
-    "about us",
-    "privacy",
-    "terms",
-    "cookie",
-    "fixtures",
-    "results",
-    "table",
-    "squad",
-    "tickets",
 ]
 
 
@@ -127,15 +131,15 @@ with open("config.json", "r", encoding="utf-8") as f:
 # STATISTICS
 # ============================================================
 
-stats = {
+STATS = {
     "scanned": 0,
     "sent": 0,
     "duplicates": 0,
-    "old": 0,
+    "too_old": 0,
     "no_date": 0,
     "not_liverpool": 0,
     "blocked": 0,
-    "bad_type": 0,
+    "bad_content": 0,
     "opponent_only": 0,
     "podcast_blocked": 0,
     "errors": 0,
@@ -163,65 +167,30 @@ def init_db():
     )
 
     conn.commit()
+
     return conn
 
 
-def make_id(url):
-    normalized = normalize_url(url)
-    return hashlib.sha256(
-        normalized.encode("utf-8")
-    ).hexdigest()
-
-
 def normalize_url(url):
-    """
-    Removes common tracking parameters so the same article
-    does not appear as several different URLs.
-    """
-
     if not url:
         return ""
 
-    try:
-        parsed = urlparse(url)
+    url = url.strip()
 
-        clean_query = []
+    parsed = urlparse(url)
 
-        for key, value in [
-            part.split("=", 1) if "=" in part else (part, "")
-            for part in parsed.query.split("&")
-            if part
-        ]:
-            key_lower = key.lower()
+    clean = parsed._replace(
+        query="",
+        fragment="",
+    )
 
-            if key_lower.startswith("utm_"):
-                continue
+    return clean.geturl().rstrip("/")
 
-            if key_lower in {
-                "fbclid",
-                "gclid",
-                "ref",
-                "source",
-            }:
-                continue
 
-            clean_query.append(
-                f"{key}={value}"
-                if value
-                else key
-            )
-
-        query = "&".join(clean_query)
-
-        result = parsed._replace(
-            query=query,
-            fragment="",
-        )
-
-        return result.geturl().rstrip("/")
-
-    except Exception:
-        return url.split("#")[0].rstrip("/")
+def make_id(url):
+    return hashlib.sha256(
+        normalize_url(url).encode("utf-8")
+    ).hexdigest()
 
 
 def already_seen(conn, url):
@@ -246,7 +215,7 @@ def mark_seen(conn, item):
         """,
         (
             item_id,
-            normalize_url(item["url"]),
+            item["url"],
             item["title"],
             item["source"],
             item["published_at"].isoformat(),
@@ -258,15 +227,41 @@ def mark_seen(conn, item):
 
 
 # ============================================================
-# TIME PARSING
+# TEXT HELPERS
+# ============================================================
+
+def normalize_text(text):
+    return re.sub(
+        r"\s+",
+        " ",
+        (text or "").strip().lower(),
+    )
+
+
+def clean_text(text):
+    if not text:
+        return ""
+
+    text = BeautifulSoup(
+        text,
+        "html.parser",
+    ).get_text(
+        " ",
+        strip=True,
+    )
+
+    return re.sub(
+        r"\s+",
+        " ",
+        text,
+    ).strip()
+
+
+# ============================================================
+# DATE PARSING
 # ============================================================
 
 def parse_datetime(value):
-    """
-    Attempts to parse common date formats.
-    Returns timezone-aware UTC datetime or None.
-    """
-
     if not value:
         return None
 
@@ -274,7 +269,9 @@ def parse_datetime(value):
         dt = value
 
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(
+                tzinfo=timezone.utc
+            )
 
         return dt.astimezone(timezone.utc)
 
@@ -365,7 +362,7 @@ def parse_feed_entry_date(entry):
 
 
 # ============================================================
-# PAGE METADATA
+# WEB PAGE DATE EXTRACTION
 # ============================================================
 
 def extract_date_from_json_ld(soup):
@@ -413,6 +410,7 @@ def extract_date_from_json_ld(soup):
             for key in [
                 "datePublished",
                 "dateCreated",
+                "dateModified",
             ]:
                 dt = parse_datetime(
                     obj.get(key)
@@ -425,14 +423,16 @@ def extract_date_from_json_ld(soup):
 
 
 def extract_date_from_meta(soup):
-    wanted = {
+    possible_names = {
         "article:published_time",
         "datepublished",
         "publishdate",
         "publication_date",
         "published_time",
         "date",
-        "datepublished",
+        "dc.date",
+        "dc.date.issued",
+        "parsely-pub-date",
     }
 
     for meta in soup.find_all("meta"):
@@ -443,7 +443,7 @@ def extract_date_from_meta(soup):
             or ""
         ).lower().strip()
 
-        if key not in wanted:
+        if key not in possible_names:
             continue
 
         value = meta.get("content")
@@ -475,17 +475,23 @@ def extract_date_from_time_tags(soup):
 
 
 def extract_page_date(soup):
-    dt = extract_date_from_json_ld(soup)
+    dt = extract_date_from_json_ld(
+        soup
+    )
 
     if dt:
         return dt
 
-    dt = extract_date_from_meta(soup)
+    dt = extract_date_from_meta(
+        soup
+    )
 
     if dt:
         return dt
 
-    dt = extract_date_from_time_tags(soup)
+    dt = extract_date_from_time_tags(
+        soup
+    )
 
     if dt:
         return dt
@@ -493,12 +499,7 @@ def extract_page_date(soup):
     return None
 
 
-def get_article_data(url):
-    """
-    Opens an article and extracts publication date
-    and a public description/summary.
-    """
-
+def get_article_date(url):
     try:
         response = requests.get(
             url,
@@ -513,200 +514,97 @@ def get_article_data(url):
             "html.parser",
         )
 
-        published_dt = extract_page_date(
+        return extract_page_date(
             soup
         )
 
-        summary = ""
-
-        # OpenGraph description.
-        for key in [
-            "og:description",
-            "description",
-        ]:
-            meta = soup.find(
-                "meta",
-                attrs={
-                    "property": key
-                },
-            )
-
-            if not meta:
-                meta = soup.find(
-                    "meta",
-                    attrs={
-                        "name": key
-                    },
-                )
-
-            if meta and meta.get(
-                "content"
-            ):
-                summary = meta.get(
-                    "content"
-                ).strip()
-
-                break
-
-        # JSON-LD description fallback.
-        if not summary:
-            scripts = soup.find_all(
-                "script",
-                attrs={
-                    "type": "application/ld+json"
-                },
-            )
-
-            for script in scripts:
-                raw = (
-                    script.string
-                    or script.get_text(
-                        strip=True
-                    )
-                )
-
-                if not raw:
-                    continue
-
-                try:
-                    data = json.loads(raw)
-                except Exception:
-                    continue
-
-                objects = []
-
-                if isinstance(data, dict):
-                    objects.append(data)
-
-                    if isinstance(
-                        data.get("@graph"),
-                        list,
-                    ):
-                        objects.extend(
-                            data["@graph"]
-                        )
-
-                elif isinstance(data, list):
-                    objects.extend(data)
-
-                for obj in objects:
-                    if not isinstance(
-                        obj,
-                        dict,
-                    ):
-                        continue
-
-                    if obj.get(
-                        "description"
-                    ):
-                        summary = str(
-                            obj["description"]
-                        ).strip()
-
-                        break
-
-                if summary:
-                    break
-
-        return {
-            "published_dt": published_dt,
-            "summary": summary,
-        }
-
     except Exception as exc:
         print(
-            f"Could not read article: {url}"
-        )
-        print(
-            f"Reason: {exc}"
+            f"Date error: {url} -> {exc}"
         )
 
-        stats["errors"] += 1
+        STATS["errors"] += 1
 
-        return {
-            "published_dt": None,
-            "summary": "",
-        }
+        return None
 
 
 # ============================================================
-# TEXT / FILTER HELPERS
+# CONTENT TYPE
 # ============================================================
-
-def normalize_text(text):
-    return re.sub(
-        r"\s+",
-        " ",
-        (text or "").strip().lower(),
-    )
-
-
-def clean_text(text):
-    text = BeautifulSoup(
-        text or "",
-        "html.parser",
-    ).get_text(
-        " ",
-        strip=True,
-    )
-
-    return re.sub(
-        r"\s+",
-        " ",
-        text,
-    ).strip()
-
-
-def is_blocked(title, summary=""):
-    text = normalize_text(
-        f"{title} {summary}"
-    )
-
-    for blocked in BLOCKED_CONTENT:
-        if blocked in text:
-            return True
-
-    for phrase in BLOCKED_PHRASES:
-        if phrase in text:
-            return True
-
-    return False
-
 
 def is_podcast(title, summary=""):
     text = normalize_text(
         f"{title} {summary}"
     )
 
-    podcast_words = [
+    words = [
         "podcast",
         "podcasts",
         "episode",
         "ep.",
-        "listen",
+        "audio",
     ]
 
     return any(
         word in text
-        for word in podcast_words
+        for word in words
     )
 
+
+def is_blocked(title, summary="", url=""):
+    text = normalize_text(
+        f"{title} {summary} {url}"
+    )
+
+    for blocked in BLOCKED_CONTENT:
+        if blocked in text:
+            return True
+
+    return False
+
+
+def is_bad_content(title, url):
+    title_text = normalize_text(
+        title
+    )
+
+    url_text = normalize_text(
+        url
+    )
+
+    for phrase in BAD_TITLE_PHRASES:
+        if phrase in title_text:
+            return True
+
+    for part in BAD_URL_PARTS:
+        if part in url_text:
+            return True
+
+    return False
+
+
+# ============================================================
+# LIVERPOOL FILTER
+# ============================================================
 
 def is_liverpool_article(
     title,
     summary="",
     source_type="",
 ):
-    title_text = normalize_text(title)
-    summary_text = normalize_text(summary)
-
-    text = (
-        f"{title_text} "
-        f"{summary_text}"
+    title_text = normalize_text(
+        title
     )
 
-    # Dedicated Liverpool pages are allowed,
-    # but bad content is still blocked elsewhere.
+    summary_text = normalize_text(
+        summary
+    )
+
+    text = (
+        f"{title_text} {summary_text}"
+    )
+
+    # Dedicated Liverpool pages
     if source_type in {
         "liverpool_page",
         "liverpool_official",
@@ -719,14 +617,10 @@ def is_liverpool_article(
     )
 
     for keyword in strong_keywords:
-        keyword = normalize_text(
-            keyword
-        )
-
-        if keyword and keyword in text:
+        if normalize_text(keyword) in text:
             return True
 
-    basic_keywords = [
+    keywords = [
         "liverpool",
         "liverpool fc",
         "lfc",
@@ -736,74 +630,67 @@ def is_liverpool_article(
 
     return any(
         keyword in text
-        for keyword in basic_keywords
+        for keyword in keywords
     )
 
+
+# ============================================================
+# OPPONENT FILTER
+# ============================================================
 
 def is_opponent_only_article(
     title,
     summary="",
 ):
-    text = normalize_text(
-        f"{title} {summary}"
+    title_text = normalize_text(
+        title
     )
 
-    # Examples of stories where Liverpool is
-    # merely the opponent/context.
-    opponent_patterns = [
-        r"\bafter .* against liverpool\b",
-        r"\bafter .* vs liverpool\b",
-        r"\bafter .* v liverpool\b",
-        r"\bagainst liverpool\b",
-        r"\bvs liverpool\b",
-        r"\bv liverpool\b",
-        r"\bmiss(es)? the liverpool game\b",
-        r"\bmiss(es)? liverpool tie\b",
-        r"\bleft out of liverpool tie\b",
+    summary_text = normalize_text(
+        summary
+    )
+
+    text = (
+        f"{title_text} {summary_text}"
+    )
+
+    opponent_phrases = [
+        "against liverpool",
+        "vs liverpool",
+        "v liverpool",
+        "liverpool tie",
+        "liverpool clash",
+        "liverpool fixture",
+        "liverpool return",
     ]
 
-    liverpool_words = [
-        "liverpool",
-        "lfc",
-        "anfield",
+    opponent_focus = [
+        "crying",
+        "emoji",
+        "ruled out",
+        "left out",
+        "misses out",
+        "injury blow",
+        "injured",
+        "return",
     ]
 
-    if not any(
-        word in text
-        for word in liverpool_words
-    ):
-        return False
-
-    # Do not reject genuine Liverpool stories.
     if any(
         phrase in text
-        for phrase in [
-            "liverpool sign",
-            "liverpool agree",
-            "liverpool deal",
-            "liverpool injury",
-            "liverpool team",
-            "liverpool lineup",
-            "liverpool line-up",
-            "liverpool contract",
-            "liverpool manager",
-            "liverpool boss",
-            "liverpool midfielder",
-            "liverpool defender",
-            "liverpool striker",
-            "liverpool forward",
-        ]
+        for phrase in opponent_phrases
     ):
-        return False
+        if any(
+            word in text
+            for word in opponent_focus
+        ):
+            return True
 
-    return any(
-        re.search(
-            pattern,
-            text,
-        )
-        for pattern in opponent_patterns
-    )
+    return False
 
+
+# ============================================================
+# TRANSFER FILTER
+# ============================================================
 
 def is_transfer_news(
     title,
@@ -817,123 +704,29 @@ def is_transfer_news(
         "transfer",
         "transfers",
         "signing",
-        "sign for",
-        "signs for",
-        "sign",
+        "sign ",
+        "signs ",
+        "signed ",
         "bid",
         "offer",
         "deal",
         "agreement",
         "agreed",
-        "swap",
-        "contract",
         "release clause",
         "interest",
-        "interested in",
         "target",
         "shortlist",
         "move for",
         "join",
+        "joins",
+        "contract",
         "departure",
         "exit",
-        "loan",
     ]
 
     return any(
         phrase in text
         for phrase in transfer_phrases
-    )
-
-
-def looks_like_video_only(
-    title,
-    summary="",
-    url="",
-):
-    text = normalize_text(
-        f"{title} {summary}"
-    )
-
-    url_text = normalize_text(url)
-
-    video_words = [
-        "watch:",
-        "watch -",
-        "watch ",
-        "(video)",
-        "video:",
-    ]
-
-    if any(
-        word in text
-        for word in video_words
-    ):
-        return True
-
-    if "/video/" in url_text:
-        return True
-
-    if "/videos/" in url_text:
-        return True
-
-    return False
-
-
-# ============================================================
-# URL FILTERING
-# ============================================================
-
-def looks_like_article_url(url):
-    if not url:
-        return False
-
-    lower = url.lower()
-
-    for part in BLOCKED_URL_PARTS:
-        if part in lower:
-            return False
-
-    return True
-
-
-def is_navigation_link(title, url):
-    title_text = normalize_text(title)
-
-    if title_text in BLOCKED_LINK_TEXT:
-        return True
-
-    if len(title_text) < 25:
-        return True
-
-    if not url:
-        return True
-
-    return False
-
-
-def absolute_url(
-    base_url,
-    href,
-):
-    if not href:
-        return None
-
-    if href.startswith(
-        "http://"
-    ):
-        return href
-
-    if href.startswith(
-        "https://"
-    ):
-        return href
-
-    if href.startswith("//"):
-        return "https:" + href
-
-    return urljoin(
-        base_url,
-        href,
     )
 
 
@@ -956,7 +749,7 @@ def is_fresh(
 
     age = now - published_dt
 
-    # Reject dates more than 5 minutes in the future.
+    # Ignore impossible future dates
     if age < timedelta(
         minutes=-5
     ):
@@ -986,140 +779,85 @@ def is_fresh(
 # DISCORD
 # ============================================================
 
-def discord_color(item):
-    if item["priority"] and item["is_transfer"]:
-        return 15158332  # red
-
-    if item["priority"]:
-        return 3066993  # green
-
-    if item["is_transfer"]:
-        return 15158332  # red
-
-    if item["is_podcast"]:
-        return 10181046  # purple
-
-    return 3447003  # blue
-
-
 def send_to_discord(item):
     if not DISCORD_WEBHOOK:
         print(
-            "ERROR: DISCORD_WEBHOOK is missing."
+            "ERROR: DISCORD_WEBHOOK missing."
         )
+
         return False
 
-    prefix = "📰"
+    priority = (
+        item["source"]
+        in PRIORITY_SOURCES
+    )
 
-    if item["priority"]:
+    transfer = item["is_transfer"]
+
+    podcast = item["is_podcast"]
+
+    if priority:
         prefix = "🟢"
 
-    if item["is_transfer"]:
+    else:
+        prefix = "📰"
+
+    if transfer:
         prefix += " 🚨"
 
-    if item["is_podcast"]:
+    if podcast:
         prefix += " 🎙️"
 
     description = (
-        item.get(
-            "summary",
-            "",
-        )
+        item.get("summary")
         or "Ingen offentlig sammanfattning tillgänglig."
     )
 
-    description = clean_text(
-        description
-    )[:900]
+    description = description[:1000]
 
-    published = item[
-        "published_at"
-    ].astimezone(
-        timezone.utc
-    )
+    if transfer and priority:
+        category = "🚨 PRIORITY TRANSFER"
 
-    now = datetime.now(
-        timezone.utc
-    )
+    elif transfer:
+        category = "🚨 TRANSFER"
 
-    age_seconds = max(
-        0,
-        int(
-            (
-                now - published
-            ).total_seconds()
-        ),
-    )
+    elif podcast:
+        category = "🎙️ PODCAST"
 
-    age_minutes = age_seconds // 60
+    elif priority:
+        category = "🟢 PRIORITY"
 
-    if age_minutes < 1:
-        age_text = "just nu"
-    elif age_minutes == 1:
-        age_text = "1 min sedan"
     else:
-        age_text = (
-            f"{age_minutes} min sedan"
-        )
+        category = "📰 LIVERPOOL NEWS"
 
     embed = {
-        "title": (
-            f"{prefix} "
-            f"{item['title']}"
-        ),
+        "title": f"{prefix} {item['title']}",
         "url": item["url"],
         "description": description,
-        "color": discord_color(item),
         "fields": [
             {
-                "name": "Källa",
-                "value": item[
-                    "source"
-                ],
+                "name": "Kategori",
+                "value": category,
                 "inline": True,
             },
             {
-                "name": "Publicerad",
-                "value": age_text,
+                "name": "Källa",
+                "value": item["source"],
                 "inline": True,
             },
         ],
         "footer": {
-            "text": (
-                "Liverpool News Monitor"
-            )
+            "text": "Liverpool News Monitor 5.0"
         },
+        "timestamp": item[
+            "published_at"
+        ].isoformat(),
     }
 
-    if item["is_transfer"]:
-        embed["fields"].append(
-            {
-                "name": "Kategori",
-                "value": "🚨 Transfer",
-                "inline": True,
-            }
-        )
-
-    elif item["is_podcast"]:
-        embed["fields"].append(
-            {
-                "name": "Kategori",
-                "value": "🎙️ Podcast",
-                "inline": True,
-            }
-        )
-
-    else:
-        embed["fields"].append(
-            {
-                "name": "Kategori",
-                "value": "📰 Liverpool News",
-                "inline": True,
-            }
-        )
-
     payload = {
-        "embeds": [embed]
+        "embeds": [
+            embed
+        ]
     }
 
     try:
@@ -1132,11 +870,10 @@ def send_to_discord(item):
         response.raise_for_status()
 
         print(
-            f"DISCORD SENT: "
-            f"{item['title']}"
+            f"DISCORD SENT: {item['title']}"
         )
 
-        stats["sent"] += 1
+        STATS["sent"] += 1
 
         return True
 
@@ -1145,7 +882,7 @@ def send_to_discord(item):
             f"Discord error: {exc}"
         )
 
-        stats["errors"] += 1
+        STATS["errors"] += 1
 
         return False
 
@@ -1163,9 +900,10 @@ def process_article(
     published_dt=None,
     source_type="",
 ):
-    stats["scanned"] += 1
+    STATS["scanned"] += 1
 
     title = clean_text(title)
+
     summary = clean_text(summary)
 
     url = normalize_url(url)
@@ -1174,14 +912,15 @@ def process_article(
         return
 
     # --------------------------------------------------------
-    # Hard content block
+    # BLOCKED CONTENT
     # --------------------------------------------------------
 
     if is_blocked(
         title,
         summary,
+        url,
     ):
-        stats["blocked"] += 1
+        STATS["blocked"] += 1
 
         print(
             f"BLOCKED: {title}"
@@ -1189,27 +928,24 @@ def process_article(
 
         return
 
-    if looks_like_video_only(
+    # --------------------------------------------------------
+    # BAD CONTENT
+    # --------------------------------------------------------
+
+    if is_bad_content(
         title,
-        summary,
         url,
     ):
-        stats["bad_type"] += 1
+        STATS["bad_content"] += 1
 
         print(
-            f"VIDEO/OTHER SKIPPED: {title}"
+            f"BAD CONTENT: {title}"
         )
 
         return
 
-    if not looks_like_article_url(
-        url
-    ):
-        stats["bad_type"] += 1
-        return
-
     # --------------------------------------------------------
-    # Liverpool filter
+    # LIVERPOOL FILTER
     # --------------------------------------------------------
 
     if not is_liverpool_article(
@@ -1217,7 +953,7 @@ def process_article(
         summary,
         source_type,
     ):
-        stats["not_liverpool"] += 1
+        STATS["not_liverpool"] += 1
 
         print(
             f"NOT LIVERPOOL: {title}"
@@ -1226,14 +962,14 @@ def process_article(
         return
 
     # --------------------------------------------------------
-    # Opponent-only filter
+    # OPPONENT FILTER
     # --------------------------------------------------------
 
     if is_opponent_only_article(
         title,
         summary,
     ):
-        stats["opponent_only"] += 1
+        STATS["opponent_only"] += 1
 
         print(
             f"OPPONENT ONLY: {title}"
@@ -1242,39 +978,25 @@ def process_article(
         return
 
     # --------------------------------------------------------
-    # Date
+    # DATE
     # --------------------------------------------------------
 
     if not published_dt:
-        print(
-            f"No RSS date, checking article: "
-            f"{title}"
-        )
-
-        data = get_article_data(
+        published_dt = get_article_date(
             url
         )
 
-        published_dt = data[
-            "published_dt"
-        ]
-
-        if not summary:
-            summary = data[
-                "summary"
-            ]
-
     if not published_dt:
-        stats["no_date"] += 1
+        STATS["no_date"] += 1
 
         print(
-            f"NO DATE: {source} | {title}"
+            f"NO DATE: {title}"
         )
 
         return
 
     # --------------------------------------------------------
-    # Podcast
+    # PODCAST
     # --------------------------------------------------------
 
     podcast = is_podcast(
@@ -1282,25 +1004,23 @@ def process_article(
         summary,
     )
 
-    if podcast:
-        if (
-            source
-            not in PRIORITY_SOURCES
-        ):
-            stats[
-                "podcast_blocked"
-            ] += 1
+    if (
+        podcast
+        and source
+        not in PRIORITY_SOURCES
+    ):
+        STATS[
+            "podcast_blocked"
+        ] += 1
 
-            print(
-                "PODCAST SKIPPED - "
-                "not priority source: "
-                f"{title}"
-            )
+        print(
+            f"PODCAST BLOCKED: {title}"
+        )
 
-            return
+        return
 
     # --------------------------------------------------------
-    # Freshness
+    # FRESHNESS
     # --------------------------------------------------------
 
     if not is_fresh(
@@ -1309,32 +1029,28 @@ def process_article(
         source,
         summary,
     ):
-        stats["old"] += 1
-
-        now = datetime.now(
-            timezone.utc
-        )
+        STATS["too_old"] += 1
 
         age = (
-            now - published_dt
+            datetime.now(timezone.utc)
+            - published_dt
         ).total_seconds() / 60
 
         print(
-            f"OLD: {title} "
-            f"| age={age:.1f} min"
+            f"OLD: {title} | age={age:.1f} min"
         )
 
         return
 
     # --------------------------------------------------------
-    # Duplicate
+    # DUPLICATE
     # --------------------------------------------------------
 
     if already_seen(
         conn,
         url,
     ):
-        stats["duplicates"] += 1
+        STATS["duplicates"] += 1
 
         print(
             f"DUPLICATE: {title}"
@@ -1343,16 +1059,12 @@ def process_article(
         return
 
     # --------------------------------------------------------
-    # Build item
+    # ITEM
     # --------------------------------------------------------
 
     transfer = is_transfer_news(
         title,
         summary,
-    )
-
-    priority = (
-        source in PRIORITY_SOURCES
     )
 
     item = {
@@ -1363,77 +1075,48 @@ def process_article(
         "published_at": published_dt,
         "is_transfer": transfer,
         "is_podcast": podcast,
-        "priority": priority,
     }
 
     # --------------------------------------------------------
-    # Log
+    # LOG
     # --------------------------------------------------------
-
-    now = datetime.now(
-        timezone.utc
-    )
-
-    age_minutes = max(
-        0,
-        (
-            now - published_dt
-        ).total_seconds() / 60,
-    )
 
     print("")
     print(
         "================================"
     )
-    print(
-        "FRESH ARTICLE FOUND"
-    )
+    print("FRESH ARTICLE")
     print(
         "================================"
     )
-    print(
-        f"Source: {source}"
-    )
-    print(
-        f"Title: {title}"
-    )
+    print(f"Source: {source}")
+    print(f"Title: {title}")
     print(
         f"Published: "
         f"{published_dt.isoformat()}"
     )
-    print(
-        f"Age: "
-        f"{age_minutes:.1f} minutes"
-    )
-
-    if priority:
-        print(
-            "Priority: YES"
-        )
 
     if transfer:
-        print(
-            "Type: TRANSFER"
-        )
-    elif podcast:
-        print(
-            "Type: PRIORITY PODCAST"
-        )
-    else:
-        print(
-            "Type: NORMAL NEWS"
-        )
+        print("Type: TRANSFER")
 
-    print(
-        "Status: FRESH"
-    )
+    elif podcast:
+        print("Type: PRIORITY PODCAST")
+
+    elif source in PRIORITY_SOURCES:
+        print("Type: PRIORITY NEWS")
+
+    else:
+        print("Type: NORMAL NEWS")
+
+    print("Status: FRESH")
+
     print(
         "================================"
     )
     print("")
 
     # --------------------------------------------------------
-    # Discord
+    # SEND
     # --------------------------------------------------------
 
     if send_to_discord(item):
@@ -1447,11 +1130,9 @@ def process_article(
 # RSS SCANNER
 # ============================================================
 
-def scan_rss(
-    conn,
-    feed,
-):
+def scan_rss(conn, feed):
     source = feed["name"]
+
     url = feed["url"]
 
     print("")
@@ -1466,11 +1147,10 @@ def scan_rss(
 
     except Exception as exc:
         print(
-            f"RSS ERROR: "
-            f"{source} -> {exc}"
+            f"RSS ERROR: {source} -> {exc}"
         )
 
-        stats["errors"] += 1
+        STATS["errors"] += 1
 
         return
 
@@ -1525,57 +1205,85 @@ def scan_rss(
 # WEB SCANNER
 # ============================================================
 
+def absolute_url(
+    base_url,
+    href,
+):
+    if not href:
+        return None
+
+    return urljoin(
+        base_url,
+        href,
+    )
+
+
+def looks_like_article_url(
+    url
+):
+    if not url:
+        return False
+
+    lower = url.lower()
+
+    for part in BAD_URL_PARTS:
+        if part in lower:
+            return False
+
+    return True
+
+
 def find_article_links(
     soup,
 ):
-    """
-    First look for actual <article> elements.
-    This avoids many navigation links.
-    """
-
     links = []
+
+    # --------------------------------------------------------
+    # FIRST: article elements
+    # --------------------------------------------------------
 
     articles = soup.find_all(
         "article"
     )
 
     for article in articles:
-        headline = None
+        heading = article.find(
+            [
+                "h1",
+                "h2",
+                "h3",
+                "h4",
+            ]
+        )
 
-        for heading_tag in [
-            "h1",
-            "h2",
-            "h3",
-        ]:
-            headline = article.find(
-                heading_tag
-            )
-
-            if headline:
-                break
-
-        if headline:
-            anchor = headline.find(
+        if heading:
+            a = heading.find(
                 "a",
                 href=True,
             )
 
-            if anchor:
-                links.append(
-                    (
-                        anchor.get_text(
-                            " ",
-                            strip=True,
-                        ),
-                        anchor.get(
-                            "href"
-                        ),
-                        article,
-                    )
+            if a:
+                title = a.get_text(
+                    " ",
+                    strip=True,
                 )
 
-                continue
+                href = a.get(
+                    "href"
+                )
 
+                if title and href:
+                    links.append(
+                        (
+                            title,
+                            href,
+                            article,
+                        )
+                    )
+
+                    continue
+
+        # fallback inside article
         for a in article.find_all(
             "a",
             href=True,
@@ -1589,52 +1297,62 @@ def find_article_links(
                 "href"
             )
 
-            if not title:
-                continue
-
-            if len(title) < 25:
-                continue
-
-            links.append(
-                (
-                    title,
-                    href,
-                    article,
+            if (
+                title
+                and href
+                and len(title) >= 25
+            ):
+                links.append(
+                    (
+                        title,
+                        href,
+                        article,
+                    )
                 )
-            )
 
-    # Fallback for sites without <article>.
+                break
+
+    # --------------------------------------------------------
+    # SECOND: headings
+    # --------------------------------------------------------
+
     if not links:
         for heading in soup.find_all(
-            ["h1", "h2", "h3"]
+            [
+                "h1",
+                "h2",
+                "h3",
+            ]
         ):
-            anchor = heading.find(
+            a = heading.find(
                 "a",
                 href=True,
             )
 
-            if not anchor:
+            if not a:
                 continue
 
-            title = anchor.get_text(
+            title = a.get_text(
                 " ",
                 strip=True,
             )
 
-            href = anchor.get(
+            href = a.get(
                 "href"
             )
 
-            if len(title) < 25:
-                continue
-
-            links.append(
-                (
-                    title,
-                    href,
-                    heading,
+            if (
+                title
+                and href
+                and len(title) >= 25
+            ):
+                links.append(
+                    (
+                        title,
+                        href,
+                        heading,
+                    )
                 )
-            )
 
     return links
 
@@ -1677,7 +1395,7 @@ def scan_web_page(
             f"{source_name} -> {exc}"
         )
 
-        stats["errors"] += 1
+        STATS["errors"] += 1
 
         return
 
@@ -1692,14 +1410,11 @@ def scan_web_page(
 
     seen_urls = set()
 
-    for title, href, element in links:
-        title = clean_text(title)
-
-        if is_navigation_link(
-            title,
-            href,
-        ):
-            continue
+    for (
+        title,
+        href,
+        element,
+    ) in links:
 
         article_url = absolute_url(
             page_url,
@@ -1725,7 +1440,6 @@ def scan_web_page(
         ):
             continue
 
-        # Avoid the page linking to itself.
         if (
             article_url.rstrip("/")
             == page_url.rstrip("/")
@@ -1733,42 +1447,128 @@ def scan_web_page(
             continue
 
         published_dt = None
-        summary = ""
 
-        # First try metadata inside the article/card.
+        # ----------------------------------------------------
+        # CARD DATE
+        # ----------------------------------------------------
+
         try:
-            published_dt = (
-                extract_page_date(
-                    element
+            time_tag = (
+                element.find(
+                    "time"
                 )
             )
+
+            if time_tag:
+                published_dt = (
+                    parse_datetime(
+                        time_tag.get(
+                            "datetime"
+                        )
+                        or time_tag.get_text(
+                            " ",
+                            strip=True,
+                        )
+                    )
+                )
+
         except Exception:
-            published_dt = None
+            pass
 
-        # If card does not contain date/summary,
-        # inspect the actual article.
+        # ----------------------------------------------------
+        # ARTICLE DATE
+        # ----------------------------------------------------
+
         if not published_dt:
-            data = get_article_data(
-                article_url
+            published_dt = (
+                get_article_date(
+                    article_url
+                )
             )
-
-            published_dt = data[
-                "published_dt"
-            ]
-
-            summary = data[
-                "summary"
-            ]
 
         process_article(
             conn=conn,
             title=title,
             url=article_url,
             source=source_name,
-            summary=summary,
+            summary="",
             published_dt=published_dt,
             source_type=source_type,
         )
+
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+def print_summary():
+    print("")
+    print(
+        "================================"
+    )
+    print("SCAN COMPLETE")
+    print(
+        "================================"
+    )
+
+    print(
+        f"Scanned:             "
+        f"{STATS['scanned']}"
+    )
+
+    print(
+        f"Discord sent:        "
+        f"{STATS['sent']}"
+    )
+
+    print(
+        f"Duplicates:          "
+        f"{STATS['duplicates']}"
+    )
+
+    print(
+        f"Too old:             "
+        f"{STATS['too_old']}"
+    )
+
+    print(
+        f"No date:             "
+        f"{STATS['no_date']}"
+    )
+
+    print(
+        f"Not Liverpool:       "
+        f"{STATS['not_liverpool']}"
+    )
+
+    print(
+        f"Blocked content:     "
+        f"{STATS['blocked']}"
+    )
+
+    print(
+        f"Bad content type:    "
+        f"{STATS['bad_content']}"
+    )
+
+    print(
+        f"Opponent only:       "
+        f"{STATS['opponent_only']}"
+    )
+
+    print(
+        f"Podcasts blocked:    "
+        f"{STATS['podcast_blocked']}"
+    )
+
+    print(
+        f"Errors:              "
+        f"{STATS['errors']}"
+    )
+
+    print(
+        "================================"
+    )
 
 
 # ============================================================
@@ -1781,7 +1581,7 @@ def main():
         "================================"
     )
     print(
-        "Liverpool News Monitor 4.0"
+        "Liverpool News Monitor 5.0"
     )
     print(
         "================================"
@@ -1847,85 +1647,30 @@ def main():
         )
 
     # --------------------------------------------------------
-    # Close database
-    # --------------------------------------------------------
-
-    conn.close()
-
-    # --------------------------------------------------------
-    # Summary
+    # X IS INTENTIONALLY DISABLED
     # --------------------------------------------------------
 
     print("")
     print(
-        "================================"
-    )
-    print(
-        "SCAN COMPLETE"
-    )
-    print(
-        "================================"
+        "X scanning is disabled."
     )
 
     print(
-        f"Scanned:          "
-        f"{stats['scanned']}"
+        "No X API, Patreon or Anfield Sector is used."
     )
 
-    print(
-        f"Discord sent:     "
-        f"{stats['sent']}"
-    )
+    # --------------------------------------------------------
+    # SUMMARY
+    # --------------------------------------------------------
 
-    print(
-        f"Duplicates:       "
-        f"{stats['duplicates']}"
-    )
+    print_summary()
 
-    print(
-        f"Too old:          "
-        f"{stats['old']}"
-    )
+    conn.close()
 
-    print(
-        f"No date:          "
-        f"{stats['no_date']}"
-    )
 
-    print(
-        f"Not Liverpool:    "
-        f"{stats['not_liverpool']}"
-    )
-
-    print(
-        f"Blocked content:  "
-        f"{stats['blocked']}"
-    )
-
-    print(
-        f"Bad content type: "
-        f"{stats['bad_type']}"
-    )
-
-    print(
-        f"Opponent only:    "
-        f"{stats['opponent_only']}"
-    )
-
-    print(
-        f"Podcasts blocked:  "
-        f"{stats['podcast_blocked']}"
-    )
-
-    print(
-        f"Errors:           "
-        f"{stats['errors']}"
-    )
-
-    print(
-        "================================"
-    )
-
+# ============================================================
+# START
+# ============================================================
 
 if __name__ == "__main__":
     main()
