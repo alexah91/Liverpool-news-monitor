@@ -31,7 +31,13 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
           python main.py
-
+      - name: Test Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d '{"content":"🔴 TEST: Liverpool News Monitor fungerar!"}' \
+          "$DISCORD_WEBHOOK"
       - name: Save database
         run: |
           git config user.name "Liverpool News Bot"
