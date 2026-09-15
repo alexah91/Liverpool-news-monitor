@@ -6,6 +6,10 @@ on:
 
   workflow_dispatch:
 
+concurrency:
+  group: liverpool-news-monitor
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
@@ -16,6 +20,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -24,6 +30,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run scanner
@@ -31,13 +38,7 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
           python main.py
-      - name: Test Discord
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        run: |
-          curl -H "Content-Type: application/json" \
-          -d '{"content":"🔴 TEST: Liverpool News Monitor fungerar!"}' \
-          "$DISCORD_WEBHOOK"
+
       - name: Save database
         run: |
           git config user.name "Liverpool News Bot"
@@ -45,6 +46,15 @@ jobs:
 
           git add news.db
 
-          git diff --cached --quiet || git commit -m "Update news database"
+          if git diff --cached --quiet; then
+            echo "No database changes."
+            exit 0
+          fi
 
-          git push
+          git commit -m "Update news database"
+
+          git fetch origin main
+
+          git rebase origin/main
+
+          git push origin HEAD:main
